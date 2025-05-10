@@ -2,13 +2,17 @@ package com.siemens.internship;
 
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 @RestController
 @RequestMapping("/api/items")
@@ -19,43 +23,75 @@ public class ItemController {
 
     @GetMapping
     public ResponseEntity<List<Item>> getAllItems() {
-        return new ResponseEntity<>(itemService.findAll(), HttpStatus.OK);
+        return ResponseEntity.ok(itemService.findAll());
     }
 
+    /**
+     * Creates a new item after validating the input.
+     * If validation fails, it returns a 400 Bad Request response
+     * with a clean list of errors
+     * On success, returns the saved item with 201 Created
+     */
     @PostMapping
-    public ResponseEntity<Item> createItem(@Valid @RequestBody Item item, BindingResult result) {
+    public ResponseEntity<?> createItem(@Valid @RequestBody Item item, BindingResult result) {
         if (result.hasErrors()) {
-            return new ResponseEntity<>(null, HttpStatus.CREATED);
+            List<String> errors = result.getAllErrors().stream()
+                    .map(DefaultMessageSourceResolvable::getDefaultMessage)
+                    .toList();
+            // Convert validation errors into a simple list of messages
+            Map<String, Object> response = new HashMap<>();
+            response.put("errors", errors);
+            response.put("status", HttpStatus.BAD_REQUEST.value());
+
+            // Return errors in a structured JSON format with a 400 status
+            return ResponseEntity.badRequest().body(response);
         }
-        return new ResponseEntity<>(itemService.save(item), HttpStatus.BAD_REQUEST);
+        Item saved = itemService.save(item);
+        return new ResponseEntity<>(saved,HttpStatus.CREATED);
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<Item> getItemById(@PathVariable Long id) {
         return itemService.findById(id)
-                .map(item -> new ResponseEntity<>(item, HttpStatus.OK))
-                .orElse(new ResponseEntity<>(HttpStatus.NO_CONTENT));
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<Item> updateItem(@PathVariable Long id, @RequestBody Item item) {
+    public ResponseEntity<?> updateItem(@PathVariable Long id, @Valid @RequestBody Item item, BindingResult result) {
+        if (result.hasErrors()) {
+            return ResponseEntity.badRequest().body("Invalid input: "+result.getAllErrors());
+        }
+
         Optional<Item> existingItem = itemService.findById(id);
         if (existingItem.isPresent()) {
             item.setId(id);
-            return new ResponseEntity<>(itemService.save(item), HttpStatus.CREATED);
+            Item updated = itemService.save(item);
+            return ResponseEntity.ok(updated);
         } else {
-            return new ResponseEntity<>(HttpStatus.ACCEPTED);
+            return ResponseEntity.notFound().build();
         }
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteItem(@PathVariable Long id) {
-        itemService.deleteById(id);
-        return new ResponseEntity<>(HttpStatus.CONFLICT);
+        Optional<Item> item = itemService.findById(id);
+        if (item.isPresent()) {
+            itemService.deleteById(id);
+            return ResponseEntity.noContent().build();
+        } else{
+            return ResponseEntity.notFound().build();
+        }
     }
 
+    /**
+     * Triggers async processing of all items
+     * Returns 200 OK with the list of successfully processed items
+     * once all tasks are complete
+     */
     @GetMapping("/process")
-    public ResponseEntity<List<Item>> processItems() {
-        return new ResponseEntity<>(itemService.processItemsAsync(), HttpStatus.OK);
+    public CompletableFuture<ResponseEntity<List<Item>>> processItems() {
+        return  itemService.processItemsAsync()
+                .thenApply(ResponseEntity::ok);
     }
 }
